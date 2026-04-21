@@ -1,0 +1,38 @@
+{
+    "file_path": "data/politicians.csv",
+    
+    "primary_entity": {
+        "name_column": "Name",
+        "type": "PERSON"
+    },
+    
+    "disambiguation_mapping": {
+        "role_or_title": "Designation",
+        "associated_locations": ["State", "Constituency"],
+        "affiliated_organizations": ["Party"]
+    },
+    
+    "relationships": [
+        {
+            "target_column": "Party",
+            "target_type": "POLITICAL_PARTY",
+            "edge_name": "MEMBER_OF"
+        },
+        {
+            "target_column": "State",
+            "target_type": "LOCATION",
+            "edge_name": "REPRESENTS"
+        },
+        {
+            "target_column": "Constituency",
+            "target_type": "LOCATION",
+            "edge_name": "ELECTED_FROM"
+        },
+        {
+            "target_column": "Criminal Cases",
+            "target_type": "CONCEPT",
+            "edge_name": "HAS_CRIMINAL_RECORD",
+            "multi_value": false
+        }
+    ]
+}

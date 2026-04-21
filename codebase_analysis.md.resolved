@@ -1,0 +1,203 @@
+# OSINT Content Engine — Full Codebase Analysis & Opinions
+
+## Architecture Overview
+
+```mermaid
+graph TD
+    subgraph "Data Sources"
+        G[Google News RSS]
+        B[Bing News RSS]
+        R[Reddit JSON API]
+    end
+
+    subgraph "Ingestion Layer"
+        M[main.py — 15min scheduler]
+        PS[polite_scraper.py — Trafilatura + curl_cffi]
+        BS[bing_scraper.py — RSS parser]
+        RS[reddit_scraper.py — JSON API]
+    end
+
+    subgraph "AI Layer"
+        ZS[BART-MNLI Zero-Shot Filter]
+        QW[Qwen 2.5:3b via Ollama — KG Extraction]
+    end
+
+    subgraph "Resolution Layer"
+        ER[knowledge_graph.py — 2-Layer Gauntlet]
+        JW[Jellyfish — Jaro-Winkler]
+        SE[all-MiniLM-L6-v2 — Sentence Embeddings]
+    end
+
+    subgraph "Storage"
+        SQ[(SQLite — tracking.db)]
+        N4[(Neo4j — Graph DB)]
+    end
+
+    subgraph "Analysis"
+        WD[watchdog.py — Tripwire Daemon]
+        LB[ai_pipeline.py — Live Briefing Engine]
+    end
+
+    subgraph "UI"
+        ST[Streamlit Dashboard]
+        AG[streamlit-agraph — Visual Link Analysis]
+    end
+
+    G --> M
+    B --> M
+    R --> M
+    M --> PS
+    M --> BS
+    M --> RS
+    PS --> ZS
+    BS --> ZS
+    RS --> ZS
+    ZS -->|pass| QW
+    ZS -->|junk/low confidence| X[Dropped]
+    QW --> ER
+    ER --> JW
+    ER --> SE
+    ER --> N4
+    QW --> SQ
+    WD --> N4
+    WD --> SQ
+    ST --> SQ
+    ST --> N4
+    ST --> LB
+    LB --> N4
+    LB --> QW
+    ST --> AG
+```
+
+---
+
+## File-by-File Breakdown
+
+### Core Orchestration
+
+| File | Lines | Role |
+|------|-------|------|
+| [main.py](file:///d:/Content_Engine/main.py) | 233 | Master scheduler — 15-min loop across Google/Bing/Reddit. Deduplicates via SQLite GUID, runs zero-shot filter, extracts KG via Ollama, saves to both SQLite and Neo4j. Graceful Ctrl+C VRAM flush. |
+| [watchdog.py](file:///d:/Content_Engine/watchdog.py) | 110 | Tripwire daemon — runs 3 Cypher topology queries (Smoke Alarm, Circular Ownership, VIP Bridge). Generates AI briefings for triggered alerts and saves them to SQLite. |
+
+### Source Layer (`src/`)
+
+| File | Lines | Role |
+|------|-------|------|
+| [polite_scraper.py](file:///d:/Content_Engine/src/polite_scraper.py) | 123 | Scrapes full article text via Trafilatura + curl_cffi with Chrome impersonation. Handles Google News URL decryption via `gnewsdecoder`. Splits live blogs by `<article>` tags, chunks text by 500-word windows. |
+| [bing_scraper.py](file:///d:/Content_Engine/src/bing_scraper.py) | 44 | Fetches Bing News RSS XML feed. Returns structured `{title, link, guid, date}` dicts. |
+| [reddit_scraper.py](file:///d:/Content_Engine/src/reddit_scraper.py) | 58 | Hits Reddit JSON API (`/hot.json`). Skips stickied posts. Compiles title+body+external links into structured text bundles. |
+| [ai_pipeline.py](file:///d:/Content_Engine/src/ai_pipeline.py) | 283 | Two major functions: (1) `filter_article()` — BART-MNLI zero-shot classifier with 11 categories + junk label, multi_label=True, >0.50 threshold. (2) `extract_knowledge_graph()` — sends chunks to Qwen with the "Caveman Schema" system prompt, produces `{entities, edges}` JSON with disambiguation keys and temporal stamps. Also hosts `generate_live_briefing()` — the `/api/chat`-based zero-hallucination evidence synthesizer with `[Ref N]` citation mapping. |
+| [knowledge_graph.py](file:///d:/Content_Engine/src/knowledge_graph.py) | 260 | Neo4j backend. Implements the RAM-Optimized 2-Layer Entity Resolution Gauntlet. Pre-fetches database entities into dictionary-RAM to execute high-speed typo/acronym/vector tests via Python. Includes Type-Aware Locks (Person honorific lock & Anti-hierarchy lock). |
+| [ingest_csv.py](file:///d:/Content_Engine/ingest_csv.py) | 560 | High-speed CSV structured ingestion engine. Extracts entities using `pd.read_csv` chunking (safe for 150k+ rows). Supports Fast Mode (direct Neo4j `UNWIND`) and Gauntlet Mode (RAM evaluation). Includes batched SQLite synchronization. |
+| [db_manager.py](file:///d:/Content_Engine/src/db_manager.py) | 73 | SQLite schema manager. Tables: `Target_Sites`, `Nodes`, `Edges`, `Processed_Articles`. |
+
+### UI (`ui/`)
+
+| File | Lines | Role |
+|------|-------|------|
+| [dashboard.py](file:///d:/Content_Engine/ui/dashboard.py) | 349 | Streamlit app with 3 tabs: (1) Raw Intelligence Cache (SQLite entity/edge tables), (2) Live Intelligence Briefings (Neo4j → Qwen dossier generator with selectbox autocomplete), (3) Visual Link Analysis (streamlit-agraph with barnesHut physics, timeline horizon guard, dark theme Vis.js styling). Sidebar has tripwire execute + DB wipe buttons. |
+
+### Utilities
+
+| File | Lines | Role |
+|------|-------|------|
+| [reset_db.py](file:///d:/Content_Engine/reset_db.py) | 40 | Nuclear reset — drops SQLite tables + `MATCH (n) DETACH DELETE n` on Neo4j. |
+| [sync_urls.py](file:///d:/Content_Engine/sync_urls.py) | 40 | One-time migration script — backports `source_url` from SQLite edges to Neo4j relationships missing them. |
+| [test_decode.py](file:///d:/Content_Engine/test_decode.py) | 12 | Quick test for Google News URL decryption. |
+| [Modelfile](file:///d:/Content_Engine/Modelfile) | 1 | Ollama model definition pointing to a local Mistral 7B GGUF (seems unused — pipeline actually uses `qwen2.5:3b`). |
+
+### Config
+
+| File | Role |
+|------|------|
+| [docker-compose.yml](file:///d:/Content_Engine/docker-compose.yml) | Runs Neo4j with APOC plugin, auth `neo4j/osint_admin123`, persistent storage in `./neo4j_docker/`. |
+| [requirements.txt](file:///d:/Content_Engine/requirements.txt) | Core deps. **Missing**: `jellyfish`, `sentence-transformers`, `scipy`, `numpy`, `neo4j`, `streamlit-agraph`, `pandas`, `python-dateutil`. |
+
+---
+
+## Issues & Technical Debt I Spotted
+
+### 🔴 Critical
+
+1. **`requirements.txt` is incomplete** — Missing at least 7 packages that are actively imported across the codebase (`jellyfish`, `sentence-transformers`, `scipy`, `numpy`, `streamlit-agraph`, `pandas`, `python-dateutil`). Anyone cloning this repo will fail to install.
+
+2. **Hardcoded credentials everywhere** — Neo4j password `osint_admin123` is copy-pasted across 6 files (`main.py`, `watchdog.py`, `dashboard.py`, `reset_db.py`, `sync_urls.py`, `ai_pipeline.py`). A single `.env` file + `python-dotenv` would solve this.
+
+3. ~~**Entity resolution scans ALL nodes on every insertion**~~ (FIXED) — Replaced by the RAM-Gauntlet pre-fetching methodology which extracts all components once and evaluates them instantly in memory using `name_lower` subset scans.
+
+### 🟡 Important
+
+4. **Mixed `requests` imports** — `reddit_scraper.py` and `watchdog.py` use stdlib `requests`, while `main.py` and `polite_scraper.py` use `curl_cffi.requests`. The `bing_scraper.py` uses `curl_cffi`. This inconsistency could cause import shadowing bugs.
+
+5. **No error recovery / retry logic** — If Ollama times out or returns 500, the article is silently skipped but NOT marked as processed. This means it'll keep retrying every 15 minutes forever, burning VRAM on the same failing article.
+
+6. **SQLite connection management** — `main.py` opens/closes connections in a tight loop (lines 138-142, 148-152). This is fine for SQLite but wasteful. More critically, there's no `try/finally` around these intermediate connections.
+
+7. **Unused Mistral GGUF file** — `mistral-7b-instruct-v0.2.Q4_K_M.gguf` is 4.07 GB sitting in the project root. The `Modelfile` references it but the pipeline exclusively uses `qwen2.5:3b`. This is wasted disk space.
+
+8. **Watchdog is not integrated into the scheduler** — `watchdog.py` is a standalone script that must be manually triggered (or via the dashboard button). It's not part of the 15-min loop in `main.py`.
+
+9. **`sync_urls.py` matches on raw entity name as `{id:}` but entities use UUIDs** — [sync_urls.py:25](file:///d:/Content_Engine/sync_urls.py#L25) queries `MATCH (s:Entity {id: $source_id})` where `source_id` comes from `Edges.Source_Node` in SQLite, which stores human-readable names — but Neo4j entity `id` is a UUID. This script likely never actually matches anything.
+
+10. **Dashboard imports at mid-file** — [dashboard.py:81-84](file:///d:/Content_Engine/ui/dashboard.py#L81-L84) has `from src.ai_pipeline import generate_live_briefing` and `from neo4j import GraphDatabase` placed after the sidebar rendering block. This works but is non-standard and fragile.
+
+### 🟢 Minor
+
+11. **Inconsistent `num_ctx` values** — Extraction uses `4096`, watchdog briefings use `2048`, live briefings use `4096`. Should be unified via a config constant (especially on 4GB VRAM).
+
+12. **`out.txt` and `log.txt`** — Orphaned output files in the project root. No `.gitignore` to exclude them along with `tracking.db`, `venv/`, `__pycache__/`, and the GGUF blob.
+
+13. **No `.gitignore`** — Dangerous for a project with a 4GB model file, venv, and database files.
+
+---
+
+## My Opinions: What To Do Next
+
+### Tier 1 — Immediate Structural Fixes (No new features)
+
+| # | Task | Effort | Impact |
+|---|------|--------|--------|
+| 1 | **Create `.env` + centralized config** | 30 min | Eliminates all hardcoded creds. Single `config.py` reads from `.env` and exposes `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASS`, `OLLAMA_URL`, `MODEL_NAME`, `NUM_CTX`, etc. |
+| 2 | **Fix `requirements.txt`** | 10 min | Add all missing packages so someone can actually `pip install -r requirements.txt` and run. |
+| 3 | **Create `.gitignore`** | 5 min | Exclude `venv/`, `__pycache__/`, `*.db`, `*.gguf`, `*.txt` logs, `neo4j_docker/data/`. |
+| 4 | **Integrate watchdog into the main loop** | 20 min | Run `watchdog.run_all_tripwires()` at the end of each `job()` cycle instead of requiring manual execution. |
+
+### Tier 2 — Performance & Reliability
+
+| # | Task | Effort | Impact |
+|---|------|--------|--------|
+| 5 | ~~**Add Neo4j vector index for entity resolution**~~ | (FIXED) | Handled by RAM Gauntlet caching architecture. |
+| 6 | **Add retry/backoff logic for Ollama calls** | 30 min | Wrap Ollama API calls with exponential backoff (3 retries). Mark articles as `FAILED` after exhausting retries so they don't loop forever. |
+| 7 | **Connection pooling** | 30 min | Use a single Neo4j driver instance and a single SQLite connection per `job()` invocation instead of open/close per article. |
+
+### Tier 3 — The Roadmap Items (From the README)
+
+| # | Task | Effort | Impact |
+|---|------|--------|--------|
+| 8 | ~~**Cold Start CSV Ingestion Script**~~ | (FIXED) | `ingest_csv.py` with Streamlit integration is now live, managing chunked DataFrame batches and `UNWIND` cypher queries to inject massive CSVs flawlessly without LLM hallucination limits. |
+| 9 | **Dynamic Watchlists UI Tab** | 2-3 hrs | A new Streamlit tab where analysts can register priority target names (persons, orgs). These names get checked against every incoming article title/entity list, triggering instant push alerts when detected. |
+| 10 | **API Integration Layer** | 4-6 hrs | Connect extracted corporate nodes to OpenCorporates/MCA APIs for automatic enrichment (director names, registration details, financial filings). |
+
+### Tier 4 — Feature Ideas Beyond the Roadmap
+
+| # | Task | Why |
+|---|------|-----|
+| 11 | **Structured Logging** | Replace `print()` statements with Python `logging` module. Add log levels (DEBUG/INFO/WARNING/ERROR). Write to rotating log files. Essential for debugging a system that runs unattended for hours. |
+| 12 | **Deduplication at the edge level** | Currently edges are `MERGE`d by source+target+relationship type — but the same relationship pair with different contexts overwrites the old context. Consider storing context as a list or creating timestamped parallel edges. |
+| 13 | **Dashboard Authentication** | Streamlit has no auth by default. Anyone on the network can wipe the database or trigger VRAM-intensive operations. Add `streamlit-authenticator` or a simple password gate. |
+| 14 | **Export/Report Generation** | Add a "Download Dossier as PDF" button. Analysts could save and share briefings externally. |
+| 15 | **Alerting via Telegram/Discord/Email** | When tripwires fire, push notifications to external channels instead of just writing to SQLite. Real watchdog behavior. |
+| 16 | **Dashboard Redesign** | The current Streamlit dashboard is functional but uses default styling. A dark-themed, OSINT-aesthetic redesign with custom CSS would make the tool feel significantly more professional. |
+
+---
+
+## My Personal Recommendation
+
+> **Start with Tier 1 (items 1-4)**. These are pure hygiene fixes — no feature risk, immediate codebase quality improvement. They take under an hour combined and set the foundation for everything else.
+>
+> Then **tackle item 5 (Neo4j vector index)** because the current entity resolution will become the bottleneck as the graph grows, and it's a ticking time bomb for performance.
+>
+> After that, the **Cold Start CSV Ingestion (item 8)** is the highest-impact feature — it transforms the graph from a sparse, slowly-growing collection of news fragments into a dense intelligence substrate that makes all the downstream analysis (tripwires, briefings, link analysis) dramatically more useful.
+
+What would you like to focus on first?

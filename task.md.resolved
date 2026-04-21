@@ -1,0 +1,29 @@
+# OSINT Content Engine — Execution Tracker
+
+## Tier 1: Immediate Structural Fixes ✅
+
+- `[x]` **1. Create `.env` + centralized `config.py`** — All 8 files refactored
+- `[x]` **2. Fix `requirements.txt`** — Added 8 missing packages
+- `[x]` **3. Create `.gitignore`** — Excludes venv, db, gguf, pycache, .env
+- `[x]` **4. Integrate watchdog into main loop** — Tripwires run after each cycle
+
+## Tier 2: Performance & Reliability ✅
+
+- `[x]` **5. Neo4j indexed entity resolution** — Cypher-side candidate filtering + text index
+- `[x]` **6. Retry/backoff for Ollama** — `ollama_request_with_retry()` + Failed_Articles table
+- `[x]` **7. Connection pooling** — Single connections per feed + dedup helpers
+
+## Tier 3: Roadmap Features
+
+- `[x]` **8. Cold Start CSV Ingestor** — Full implementation with:
+  - `ingest_csv.py` — 3-phase fast engine (Prepare → GPU Vectorize → Resolve + Inject)
+  - `configs/` — Example JSON mapping files (nifty500, politicians)
+  - `data/` — Sample CSV files for testing
+  - Dashboard Tab 4 — Interactive CSV upload + column mapping UI
+  - Editable Generated Config JSON for power users
+  - GPU batch vectorization (`batch_size=256` on RTX 3050)
+  - Cypher UNWIND batch edge injection (replaces N+1 individual calls)
+  - Pause/resume via `CSV_Ingestion_Progress` SQLite table
+  - `--reset` CLI flag to clear progress and re-ingest
+- `[ ]` **9. Dynamic Watchlists UI Tab**
+- `[ ]` **10. API Integration Layer**

@@ -1,0 +1,11 @@
+Virtual Memory: svmem(total=16889200640, available=3322712064, percent=80.3, used=13566488576, free=3322712064)
+vmmemWSL: 1011.3828125 MB
+Antigravity.exe: 404.48828125 MB
+language_server_windows_x64.exe: 355.28515625 MB
+MemCompression: 283.53125 MB
+Antigravity.exe: 274.70703125 MB
+Antigravity.exe: 203.4296875 MB
+Antigravity.exe: 201.60546875 MB
+explorer.exe: 150.06640625 MB
+Docker Desktop.exe: 145.0 MB
+AvastSvc.exe: 140.73046875 MB

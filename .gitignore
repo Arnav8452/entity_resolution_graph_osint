@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Environment
+.env
+
+# Database files
+*.db
+neo4j_docker/data/
+neo4j_docker/logs/
+
+# Model files
+*.gguf
+
+# Logs and output
+log.txt
+out.txt
+
+# IDE
+.vscode/
+.idea/
+
+# Streamlit
+.streamlit/

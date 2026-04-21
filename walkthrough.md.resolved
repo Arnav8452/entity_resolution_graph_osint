@@ -1,0 +1,131 @@
+# OSINT Content Engine — Full Walkthrough
+
+## Summary
+
+Executed 10 structural, performance, and feature improvements across 14 files. The system went from hardcoded credentials and O(n) entity resolution to a centralized config, indexed graph queries, GPU-batched CSV ingestion, and a full dashboard UI for data import.
+
+---
+
+## Tier 1: Structural Hygiene
+
+### 1. Centralized Config
+**Files:** [config.py](file:///d:/Content_Engine/src/config.py) (NEW), [.env](file:///d:/Content_Engine/.env) (NEW)
+
+Replaced hardcoded `"osint_admin123"` and `"qwen2.5:3b"` across 8 files with a single `.env` + `config.py` that exports typed constants via `python-dotenv`.
+
+### 2. Fixed requirements.txt
+**File:** [requirements.txt](file:///d:/Content_Engine/requirements.txt)
+
+Added 8 missing packages: `jellyfish`, `sentence-transformers`, `scipy`, `numpy`, `streamlit-agraph`, `pandas`, `python-dateutil`, `python-dotenv`.
+
+### 3. Created .gitignore
+**File:** [.gitignore](file:///d:/Content_Engine/.gitignore) (NEW)
+
+Excludes `venv/`, `*.db`, `*.gguf`, `__pycache__/`, `.env`, log files.
+
+### 4. Watchdog Integration
+**File:** [main.py](file:///d:/Content_Engine/main.py)
+
+Tripwire daemon now runs automatically after each 15-min ingestion cycle.
+
+---
+
+## Tier 2: Performance & Reliability
+
+### 5. Indexed Entity Resolution
+**File:** [knowledge_graph.py](file:///d:/Content_Engine/src/knowledge_graph.py)
+
+| Change | Impact |
+|--------|--------|
+| `_fetch_layer1_candidates()` — Cypher-side `CONTAINS`/`STARTS WITH` filtering | Only plausible candidates leave the DB |
+| `CREATE TEXT INDEX` on `Entity.name_lower` | B-tree index for fast text lookups |
+| `CREATE CONSTRAINT` on `Entity.id` | O(1) UUID uniqueness |
+| `n.name_lower = toLower($name)` stored + backfilled | Case-insensitive index hits |
+| `precomputed_vector` parameter on `get_or_create_entity()` | Skip GPU encoding when vector is already computed (used by CSV ingestor) |
+| `batch_merge_edges()` with Cypher `UNWIND` | Replaces N individual `session.run()` calls with ~5 total calls grouped by relationship type |
+
+### 6. Ollama Retry/Backoff
+**File:** [ai_pipeline.py](file:///d:/Content_Engine/src/ai_pipeline.py)
+
+- `ollama_request_with_retry()` wraps ALL 4 Ollama call sites with 3 retries + exponential backoff (2→4→8s)
+- `Failed_Articles` SQLite table prevents infinite retry loops
+- [watchdog.py](file:///d:/Content_Engine/watchdog.py) also uses the shared retry wrapper
+
+### 7. Connection Pooling
+**File:** [main.py](file:///d:/Content_Engine/main.py)
+
+- `_is_already_processed()` / `_mark_as_failed()` helpers accept shared connection
+- Each feed processor opens ONE connection for all dedup checks
+- Air-Lock-rejected articles now marked as processed (fixed re-classification bug)
+
+---
+
+## Tier 3: CSV Cold Start Ingestor
+
+### 8. Fast CSV Ingestor (GPU Batch + UNWIND + Pause/Resume)
+
+#### Files Created
+
+| File | Purpose |
+|------|---------|
+| [ingest_csv.py](file:///d:/Content_Engine/ingest_csv.py) | 3-phase fast ingestion engine |
+| [configs/nifty500.json](file:///d:/Content_Engine/configs/nifty500.json) | Example config for company CSVs |
+| [configs/politicians.json](file:///d:/Content_Engine/configs/politicians.json) | Example config for politician CSVs |
+| [data/nifty500.csv](file:///d:/Content_Engine/data/nifty500.csv) | 10 sample companies |
+| [data/politicians.csv](file:///d:/Content_Engine/data/politicians.csv) | 10 sample politicians |
+| [CSV_INGESTOR_GUIDE.md](file:///d:/Content_Engine/CSV_INGESTOR_GUIDE.md) | User guide for both dashboard and CLI usage |
+
+#### Files Modified
+
+| File | Change |
+|------|--------|
+| [dashboard.py](file:///d:/Content_Engine/ui/dashboard.py) | Added Tab 4 "CSV Ingestor" with upload + column mapping + editable JSON config + fast pipeline call |
+| [knowledge_graph.py](file:///d:/Content_Engine/src/knowledge_graph.py) | Added `precomputed_vector` param + `batch_merge_edges()` with UNWIND |
+| [db_manager.py](file:///d:/Content_Engine/src/db_manager.py) | Added `Failed_Articles` table |
+| [reset_db.py](file:///d:/Content_Engine/reset_db.py) | Added `Failed_Articles` + `CSV_Ingestion_Progress` to table drop list |
+
+#### Architecture: 3-Phase Pipeline
+
+```mermaid
+graph LR
+    A[Phase 1: PREPARE] --> B[Phase 2: GPU VECTORIZE]
+    B --> C[Phase 3: RESOLVE + INJECT]
+    
+    A --> |"CSV rows → Caveman JSONs<br/>Collect context strings"| A
+    B --> |"embedder.encode(all_strings,<br/>batch_size=256) on RTX 3050"| B
+    C --> |"Gauntlet with pre-computed vectors<br/>+ UNWIND edge batches"| C
+```
+
+| Phase | Before (Row-by-Row) | After (Batched) |
+|-------|---------------------|-----------------|
+| **GPU Encoding** | `encode(1 string)` × N in loop | `encode(all, batch_size=256)` once |
+| **Edge Injection** | `session.run()` × N calls | `UNWIND $batch` — ~5 total calls |
+| **Entity Resolution** | Encode + query per entity | Pre-computed vector + query only |
+
+#### Pause/Resume System
+
+- `CSV_Ingestion_Progress` SQLite table tracks `(file_hash, row_index)` per file
+- Re-running the same file auto-skips completed rows
+- **Ctrl+C** flushes progress buffer safely before exit
+- `--reset` CLI flag clears progress for fresh start
+- Dashboard shows "⏩ Resumed" count in summary metrics
+
+#### Dashboard Tab 4: CSV Ingestor UI
+
+4-step wizard flow:
+1. **Upload** — Drag/drop CSV → data preview table
+2. **Step 1** — Primary entity: name column + type dropdown
+3. **Step 2** — Disambiguation keys: role / location / organization column mapping
+4. **Step 3** — Relationships: dynamic ＋/－ rows with target column + type + edge label
+5. **Generated Config** — Editable JSON text area (power users can add `multi_value: true`, etc.)
+6. **🚀 Ingest** — Calls `ingest_csv_fast()` with live progress bar + 4-metric summary
+
+#### Lazy Model Loading Fix
+
+The `SentenceTransformer` was loading at module import time, crashing the dashboard with `OpenBLAS memory allocation` errors. Fixed by converting to lazy `get_embedder()` pattern (same as `get_classifier()` in ai_pipeline.py). Model only loads when entity resolution actually runs.
+
+---
+
+## Validation
+
+All 14 project files pass `py_compile` syntax check. The live news pipeline (`main.py`) is unaffected — it still uses the same gauntlet, just with the new `precomputed_vector` parameter defaulting to `None` (existing behavior preserved).

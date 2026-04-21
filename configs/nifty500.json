@@ -1,0 +1,32 @@
+{
+    "file_path": "data/nifty500.csv",
+    
+    "primary_entity": {
+        "name_column": "Company Name",
+        "type": "ORGANIZATION"
+    },
+    
+    "disambiguation_mapping": {
+        "role_or_title": "Industry",
+        "associated_locations": ["Headquarters"],
+        "affiliated_organizations": ["Group"]
+    },
+    
+    "relationships": [
+        {
+            "target_column": "Sector",
+            "target_type": "CONCEPT",
+            "edge_name": "BELONGS_TO_SECTOR"
+        },
+        {
+            "target_column": "Group",
+            "target_type": "ORGANIZATION",
+            "edge_name": "SUBSIDIARY_OF"
+        },
+        {
+            "target_column": "Headquarters",
+            "target_type": "LOCATION",
+            "edge_name": "HEADQUARTERED_IN"
+        }
+    ]
+}
